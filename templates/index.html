@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Biodiesel Plant — Remote HMI (S7-200)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  *{-webkit-tap-highlight-color:transparent}
+  body{background:#0b1329;color:#cbd5e1;font-family:ui-sans-serif,system-ui,sans-serif}
+  .glass{background:rgba(17,28,58,.72);backdrop-filter:blur(12px);border:1px solid rgba(34,211,238,.1)}
+  .panel-title{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;font-weight:700}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .tab-btn{color:#94a3b8;border:1px solid transparent;transition:all .15s;white-space:nowrap}
+  .tab-btn:hover{color:#e2e8f0;background:rgba(255,255,255,.03)}
+  .tab-active{background:rgba(34,211,238,.12);color:#22d3ee;border-color:rgba(34,211,238,.4)}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:9999px;font-size:.7rem;font-weight:600;border:1px solid}
+  .led{width:8px;height:8px;border-radius:9999px;display:inline-block;flex-shrink:0}
+  .led.on{background:#22c55e;box-shadow:0 0 8px #22c55e}
+  .led.off{background:#475569}
+  .bar-track{background:#1e293b;height:10px;border-radius:9999px;overflow:hidden}
+  .bar-fill{height:100%;background:linear-gradient(90deg,#06b6d4,#22d3ee,#67e8f9);transition:width .5s ease}
+  .kpi-card{position:relative;overflow:hidden}
+  .kpi-card::before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,rgba(34,211,238,.08),transparent 60%);pointer-events:none}
+  .spark{width:100%;height:24px;display:block}
+
+  /* Tanks */
+  .tank-wrap{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .tank-vessel{position:relative;width:72px;height:150px;background:#0a1628;border:2px solid #1e3a5f;border-radius:6px;overflow:hidden}
+  .tank-water{position:absolute;bottom:0;left:0;right:0;height:0;background:linear-gradient(180deg,#22d3ee,#0891b2 40%,#075985);transition:height .5s ease,background .3s ease}
+  .tank-water::after{content:'';position:absolute;top:-3px;left:0;right:0;height:6px;background:linear-gradient(90deg,transparent,rgba(103,232,249,.7),transparent);animation:shimmer 2s linear infinite}
+  @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+  .tank-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.95rem;color:#fff;text-shadow:0 2px 4px #000;font-family:ui-monospace,monospace}
+
+  /* Equipment cards */
+  .equip-card{padding:8px;border-radius:8px;border:1px solid #1e293b;background:rgba(15,23,42,.5);cursor:pointer;transition:all .15s}
+  .equip-card:hover{border-color:rgba(34,211,238,.5);transform:translateY(-1px)}
+  .equip-card.on{border-color:#22c55e;background:rgba(34,197,94,.08);box-shadow:0 0 12px rgba(34,197,94,.2)}
+  .equip-card.on .led{animation:pulseDot 1.5s ease-in-out infinite}
+  @keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(1.2)}}
+
+  /* Flow arrows */
+  .flow{position:relative;height:6px;background:#0f1e3d;border-radius:3px;overflow:hidden;margin:8px 0}
+  .flow::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0 8px,#22d3ee 8px 12px,transparent 12px 20px);opacity:.15}
+  .flow.active::before{opacity:1;animation:flowMove .8s linear infinite}
+  @keyframes flowMove{to{background-position:20px 0}}
+  .flow.active{background:#0a1628}
+
+  /* SFC steps */
+  .sfc-step{border-left:3px solid #1e293b;transition:all .2s;cursor:pointer;padding:12px;border-radius:6px}
+  .sfc-step:hover{border-left-color:rgba(34,211,238,.5);background:rgba(34,211,238,.04)}
+  .sfc-step.active{border-left-color:#22d3ee;background:rgba(34,211,238,.08);box-shadow:0 0 0 1px rgba(34,211,238,.2) inset}
+  .sfc-step.active .step-num{background:#22d3ee;color:#0b1329}
+  .sfc-step.done{border-left-color:#22c55e}
+  .sfc-step.done .step-num{background:#22c55e;color:#0b1329}
+  .step-num{width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:9999px;background:#1e293b;color:#94a3b8;font-weight:700;font-size:11px;flex-shrink:0;font-family:ui-monospace,monospace}
+
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#1e293b;border-radius:4px}
+  #toast{transition:opacity .25s,transform .25s;opacity:1;transform:translateY(0)}
+  #toast.hidden{opacity:0;transform:translateY(-8px);pointer-events:none}
+  .tab-panel{animation:fadeIn .2s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- HEADER -->
+<header class="sticky top-0 z-40 glass border-b border-cyan-500/20">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500/25 to-cyan-500/5 border border-cyan-400/30 flex items-center justify-center">
+        <i data-lucide="factory" class="w-5 h-5 text-cyan-400"></i>
+      </div>
+      <div>
+        <h1 class="text-sm font-bold tracking-wider text-slate-100">BIODIESEL PLANT — REMOTE HMI</h1>
+        <p class="text-[10px] text-slate-500 mono">S7-200 CPU 224 · PPI/RS-485 · SASOL BAEC-SASB-103-0010-001</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <span id="connBadge" class="badge bg-emerald-500/10 border-emerald-500/30 text-emerald-400">
+        <span class="led on"></span> <span class="mono">192.168.1.100</span>
+      </span>
+      <span class="badge bg-cyan-500/10 border-cyan-500/30 text-cyan-300">
+        <i data-lucide="activity" class="w-3 h-3"></i> <span id="latency" class="mono">124</span><span class="text-[9px] opacity-70">ms</span>
+      </span>
+      <span class="badge bg-indigo-500/10 border-indigo-500/30 text-indigo-300">
+        <i data-lucide="shield-check" class="w-3 h-3"></i> <span id="vpnRole">ENGINEER</span>
+      </span>
+      <button id="btnEstop" class="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-lg shadow-red-900/40 transition">
+        <i data-lucide="octagon-alert" class="w-4 h-4"></i> E-STOP
+      </button>
+    </div>
+  </div>
+  <nav class="max-w-7xl mx-auto px-4 pb-2 flex gap-1 overflow-x-auto text-[11px] font-semibold">
+    <button class="tab-btn tab-active px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="overview"><i data-lucide="layout-dashboard" class="w-3.5 h-3.5"></i> Overview</button>
+    <button class="tab-btn px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="pretreat"><i data-lucide="container" class="w-3.5 h-3.5"></i> 1. Pre-Treatment</button>
+    <button class="tab-btn px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="dosing"><i data-lucide="beaker" class="w-3.5 h-3.5"></i> 2. Dosing & Mixing</button>
+    <button class="tab-btn px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="wash"><i data-lucide="droplets" class="w-3.5 h-3.5"></i> 3. Wash & Drying</button>
+    <button class="tab-btn px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="sfc"><i data-lucide="git-branch" class="w-3.5 h-3.5"></i> SFC Sequence</button>
+    <button class="tab-btn px-3 py-2 rounded-lg flex items-center gap-1.5" data-tab="analytics"><i data-lucide="line-chart" class="w-3.5 h-3.5"></i> Analytics</button>
+  </nav>
+</header>
+
+<main class="max-w-7xl mx-auto px-3 md:px-4 py-5 pb-20">
+
+<!-- OVERVIEW -->
+<section id="tab-overview" class="tab-panel space-y-4">
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="kpi-card glass rounded-xl p-4">
+      <p class="text-[10px] uppercase text-slate-400 tracking-wider">Active Step</p>
+      <p class="text-xl font-bold text-cyan-400 mt-1" id="kpiStep">IDLE</p>
+      <p class="text-[10px] text-slate-500" id="kpiStepSub">SFC 0 / 8</p>
+      <svg class="spark mt-2" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline id="spark-step" fill="none" stroke="#22d3ee" stroke-width="1.5" points=""/></svg>
+    </div>
+    <div class="kpi-card glass rounded-xl p-4">
+      <p class="text-[10px] uppercase text-slate-400 tracking-wider">Reactor Temp</p>
+      <p class="text-xl font-bold text-amber-400 mt-1"><span id="kpiTemp">--</span><span class="text-xs"> °C</span></p>
+      <p class="text-[10px] text-slate-500">TK_103</p>
+      <svg class="spark mt-2" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline id="spark-temp" fill="none" stroke="#f59e0b" stroke-width="1.5" points=""/></svg>
+    </div>
+    <div class="kpi-card glass rounded-xl p-4">
+      <p class="text-[10px] uppercase text-slate-400 tracking-wider">Product Level</p>
+      <p class="text-xl font-bold text-emerald-400 mt-1"><span id="kpiProduct">--</span><span class="text-xs"> %</span></p>
+      <p class="text-[10px] text-slate-500">TK_111</p>
+      <svg class="spark mt-2" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline id="spark-product" fill="none" stroke="#22c55e" stroke-width="1.5" points=""/></svg>
+    </div>
+    <div class="kpi-card glass rounded-xl p-4">
+      <p class="text-[10px] uppercase text-slate-400 tracking-wider">Batch / Cycles</p>
+      <p class="text-xl font-bold text-indigo-400 mt-1"><span id="kpiBatch">1</span> <span class="text-slate-500 text-sm">/</span> <span id="kpiCycles">0</span></p>
+      <p class="text-[10px] text-slate-500">Production runs</p>
+      <svg class="spark mt-2" viewBox="0 0 100 24" preserveAspectRatio="none"><polyline id="spark-flow" fill="none" stroke="#6366f1" stroke-width="1.5" points=""/></svg>
+    </div>
+  </div>
+
+  <div class="glass rounded-xl p-4">
+    <div class="flex justify-between text-xs mb-2">
+      <span class="panel-title">Step Progress</span>
+      <span class="text-cyan-400 mono" id="progressText">0%</span>
+    </div>
+    <div class="bar-track"><div class="bar-fill" id="progressBar" style="width:0%"></div></div>
+    <div class="flex justify-between text-[10px] text-slate-500 mt-2 mono">
+      <span id="progressElapsed">0s elapsed</span>
+      <span id="progressRemaining">0s remaining</span>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="glass rounded-xl p-4">
+      <h3 class="panel-title mb-3 flex items-center gap-2"><i data-lucide="cpu" class="w-4 h-4 text-cyan-400"></i> PLC Architecture</h3>
+      <div class="space-y-2 text-xs">
+        <div class="flex justify-between"><span class="text-slate-400">CPU Model</span><span class="mono text-cyan-300">S7-200 CPU 224</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Protocol</span><span class="mono text-cyan-300">PPI / RS-485</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Link</span><span class="text-emerald-400" id="linkStatus">● ONLINE</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Outputs ON</span><span class="mono text-emerald-300" id="outputsOn">0</span></div>
+        <div class="flex justify-between"><span class="text-slate-400">Uptime</span><span class="mono" id="uptime">0s</span></div>
+      </div>
+    </div>
+    <div class="glass rounded-xl p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="panel-title flex items-center gap-2"><i data-lucide="siren" class="w-4 h-4 text-red-400"></i> Alarms</h3>
+        <button id="btnAck" class="text-[10px] px-2 py-1 rounded border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-slate-200">ACK</button>
+      </div>
+      <div id="alarmList" class="space-y-1 max-h-40 overflow-y-auto text-[11px]"><p class="text-slate-500 italic">No active alarms</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRE-TREATMENT -->
+<section id="tab-pretreat" class="tab-panel hidden space-y-4">
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">HMI Screen 1 — Pre-Treatment Sub-System</h3>
+    <div class="grid md:grid-cols-3 gap-4">
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_101"></div><div class="tank-label" id="tank-val-TK_101">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_101</p>
+        <p class="text-[10px] text-slate-500">Raw Oil Storage</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="flow flex-1 self-stretch" id="flow-1"></div>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_102"></div><div class="tank-label" id="tank-val-TK_102">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_102</p>
+        <p class="text-[10px] text-slate-500">Pre-Treatment</p>
+      </div>
+    </div>
+  </div>
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">Equipment — click to toggle</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2" id="outs-1"></div>
+  </div>
+</section>
+
+<!-- DOSING -->
+<section id="tab-dosing" class="tab-panel hidden space-y-4">
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">HMI Screen 2 — Dosing & Mixing</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_103"></div><div class="tank-label" id="tank-val-TK_103">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_103</p>
+        <p class="text-[10px] text-slate-500">Mixing Reactor</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_104"></div><div class="tank-label" id="tank-val-TK_104">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_104</p>
+        <p class="text-[10px] text-slate-500">Settling Tank</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_105"></div><div class="tank-label" id="tank-val-TK_105">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_105</p>
+        <p class="text-[10px] text-slate-500">Methoxide Dosing</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_107"></div><div class="tank-label" id="tank-val-TK_107">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_107</p>
+        <p class="text-[10px] text-slate-500">Glycerine</p>
+      </div>
+    </div>
+  </div>
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">Equipment — click to toggle</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2" id="outs-2"></div>
+  </div>
+</section>
+
+<!-- WASH -->
+<section id="tab-wash" class="tab-panel hidden space-y-4">
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">HMI Screen 3 — Wash & Drying</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_108"></div><div class="tank-label" id="tank-val-TK_108">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_108</p>
+        <p class="text-[10px] text-slate-500">Wash & Dry</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_111"></div><div class="tank-label" id="tank-val-TK_111">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_111</p>
+        <p class="text-[10px] text-slate-500">Biodiesel Product</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_106"></div><div class="tank-label" id="tank-val-TK_106">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_106</p>
+        <p class="text-[10px] text-slate-500">Warm Water</p>
+      </div>
+      <div class="flex flex-col items-center">
+        <div class="tank-vessel"><div class="tank-water" id="tank-TK_110"></div><div class="tank-label" id="tank-val-TK_110">--</div></div>
+        <p class="font-mono font-bold text-xs mt-2">TK_110</p>
+        <p class="text-[10px] text-slate-500">Drainage Sump</p>
+      </div>
+    </div>
+  </div>
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3">Equipment — click to toggle</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2" id="outs-3"></div>
+  </div>
+</section>
+
+<!-- SFC -->
+<section id="tab-sfc" class="tab-panel hidden space-y-4">
+  <div class="glass rounded-xl p-4 flex flex-wrap justify-between items-center gap-3">
+    <div>
+      <h3 class="text-sm font-bold text-slate-200">8-Step Sequential Function Chart</h3>
+      <p class="text-[11px] text-slate-500">Click any step card to force the sequence. Use Start / Stop to run normally.</p>
+    </div>
+    <div class="flex gap-2">
+      <button id="btnStart" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition">
+        <i data-lucide="play" class="w-4 h-4"></i> START
+      </button>
+      <button id="btnStop" class="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 transition">
+        <i data-lucide="pause" class="w-4 h-4"></i> STOP
+      </button>
+      <button id="btnIdle" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold flex items-center gap-1.5 transition">
+        <i data-lucide="rotate-ccw" class="w-4 h-4"></i> RESET
+      </button>
+    </div>
+  </div>
+  <div id="sfcGrid" class="grid md:grid-cols-2 lg:grid-cols-4 gap-3"></div>
+</section>
+
+<!-- ANALYTICS -->
+<section id="tab-analytics" class="tab-panel hidden space-y-4">
+  <div class="glass rounded-xl p-4">
+    <h3 class="panel-title mb-3 flex items-center gap-2"><i data-lucide="line-chart" class="w-4 h-4 text-cyan-400"></i> Live Temperature Trends (TK_102 / TK_106)</h3>
+    <div style="height:300px"><canvas id="trendChart"></canvas></div>
+  </div>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="glass rounded-xl p-4"><p class="text-[10px] uppercase text-slate-400">pH</p><p class="text-2xl font-bold text-cyan-400 mt-1 mono" id="anaPh">--</p></div>
+    <div class="glass rounded-xl p-4"><p class="text-[10px] uppercase text-slate-400">Flow</p><p class="text-2xl font-bold text-emerald-400 mt-1 mono"><span id="anaFlow">--</span><span class="text-xs"> L/min</span></p></div>
+    <div class="glass rounded-xl p-4"><p class="text-[10px] uppercase text-slate-400">Pressure</p><p class="text-2xl font-bold text-amber-400 mt-1 mono"><span id="anaPres">--</span><span class="text-xs"> bar</span></p></div>
+    <div class="glass rounded-xl p-4"><p class="text-[10px] uppercase text-slate-400">Water Temp</p><p class="text-2xl font-bold text-orange-400 mt-1 mono"><span id="anaWater">--</span><span class="text-xs"> °C</span></p></div>
+  </div>
+</section>
+
+</main>
+
+<footer class="fixed bottom-0 left-0 right-0 z-30 glass border-t border-red-500/30">
+  <div class="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2 text-[11px] text-red-300">
+    <i data-lucide="shield-alert" class="w-4 h-4 text-red-400 flex-shrink-0"></i>
+    <span><b>SAFETY INTERLOCK:</b> Heaters inhibited when LT_101 &lt; 25%. Emergency Stop de-energises all outputs immediately.</span>
+  </div>
+</footer>
+
+<div id="toast" class="fixed top-20 right-4 z-50 hidden max-w-sm px-4 py-3 rounded-lg text-sm font-semibold shadow-xl"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  var $ = function(id) { return document.getElementById(id); };
+  var lastState = null;
+  var trendChart = null;
+  var histories = { step: [], temp: [], product: [], flow: [] };
+
+  // ---------- Toast ----------
+  function toast(msg, ok) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'fixed top-20 right-4 z-50 max-w-sm px-4 py-3 rounded-lg text-sm font-semibold shadow-xl ' +
+                   (ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function() { t.classList.add('hidden'); }, 3500);
+  }
+
+  // ---------- Tab switching (event delegation) ----------
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.tab-btn');
+    if (!btn) return;
+    document.querySelectorAll('.tab-btn').forEach(function(b){ b.classList.remove('tab-active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.add('hidden'); });
+    btn.classList.add('tab-active');
+    var panel = $('tab-' + btn.dataset.tab);
+    if (panel) panel.classList.remove('hidden');
+    if (btn.dataset.tab === 'analytics' && trendChart) {
+      setTimeout(function(){ trendChart.resize(); }, 60);
+    }
+    if (window.lucide) lucide.createIcons();
+  });
+
+  // ---------- Equipment & SFC card click (event delegation) ----------
+  document.addEventListener('click', function(e) {
+    var eq = e.target.closest('.equip-card');
+    if (eq && eq.dataset.tag) {
+      sendCommand('TOGGLE_OUTPUT', { tag: eq.dataset.tag });
+      return;
+    }
+    var st = e.target.closest('[data-step]');
+    if (st && st.dataset.step) {
+      var n = parseInt(st.dataset.step, 10);
+      if (confirm('Force SFC to STEP ' + n + '?')) sendCommand('SET_STEP', { step: n });
+    }
+  });
+
+  // ---------- Command send ----------
+  function sendCommand(action, extra) {
+    var body = Object.assign({ action: action }, extra || {});
+    fetch('/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){ return r.json().then(function(d){ d._status = r.status; return d; }); })
+    .then(function(d) {
+      toast(d.message || (d.ok ? 'OK' : 'Rejected'), !!d.ok);
+      if (d.state) render(d.state);
+    })
+    .catch(function(err){ toast('Network error: ' + err.message, false); });
+  }
+
+  // ---------- Button wiring ----------
+  document.addEventListener('DOMContentLoaded', function() {
+    if (window.lucide) lucide.createIcons();
+
+    $('btnEstop').addEventListener('click', function() {
+      if (lastState && lastState.estop) {
+        if (confirm('RESET emergency stop?')) sendCommand('RESET_ESTOP');
+      } else {
+        if (confirm('EMERGENCY STOP — de-energise all outputs?')) sendCommand('EMERGENCY_STOP');
+      }
+    });
+
+    $('btnStart').addEventListener('click', function() { sendCommand('START_SEQUENCE'); });
+    $('btnStop').addEventListener('click', function() { sendCommand('STOP_SEQUENCE'); });
+    $('btnIdle').addEventListener('click', function() {
+      if (confirm('Reset sequence to IDLE?')) sendCommand('SET_STEP', { step: 0 });
+    });
+    $('btnAck').addEventListener('click', function() { sendCommand('ACK_ALARMS'); });
+
+    initChart();
+    poll();
+    setInterval(poll, 1000);
+  });
+
+  // ---------- Sparkline ----------
+  function updateSpark(id, values) {
+    var el = $(id);
+    if (!el || values.length < 2) return;
+    var recent = values.slice(-20);
+    var max = Math.max.apply(null, recent);
+    var min = Math.min.apply(null, recent);
+    var range = (max - min) || 1;
+    var pts = recent.map(function(v, i) {
+      var x = (i / (recent.length - 1)) * 100;
+      var y = 22 - ((v - min) / range) * 20;
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    el.setAttribute('points', pts);
+  }
+
+  // ---------- Tank ----------
+  function setTank(tag, value) {
+    var water = $('tank-' + tag);
+    var label = $('tank-val-' + tag);
+    if (!water) return;
+    var pct = Math.max(0, Math.min(100, value));
+    water.style.height = pct + '%';
+    if (pct < 25) water.style.background = 'linear-gradient(180deg,#ef4444,#b91c1c)';
+    else if (pct > 75) water.style.background = 'linear-gradient(180deg,#22c55e,#15803d)';
+    else water.style.background = 'linear-gradient(180deg,#22d3ee,#0891b2 40%,#075985)';
+    if (label) label.textContent = Math.round(pct) + '%';
+  }
+
+  // ---------- Equipment card build ----------
+  function buildEquipCard(tag, o) {
+    var d = document.createElement('div');
+    d.className = 'equip-card' + (o.state ? ' on' : '');
+    d.dataset.tag = tag;
+    d.innerHTML =
+      '<div class="flex justify-between items-center">' +
+        '<span class="font-mono text-[11px] font-bold">' + tag + '</span>' +
+        '<span class="led ' + (o.state ? 'on' : 'off') + '"></span>' +
+      '</div>' +
+      '<p class="text-[9px] text-slate-500 leading-tight mt-1">' + o.name + '</p>' +
+      '<p class="text-[9px] font-mono text-cyan-500/70">' + o.addr + '</p>';
+    return d;
+  }
+
+  function renderOutputs(s, containerId, screenNum) {
+    var c = $(containerId);
+    if (!c) return;
+    c.innerHTML = '';
+    Object.keys(s.outputs).forEach(function(tag) {
+      var o = s.outputs[tag];
+      if (o.screen !== screenNum) return;
+      c.appendChild(buildEquipCard(tag, o));
+    });
+  }
+
+  // ---------- SFC grid ----------
+  function renderSfc(s) {
+    var grid = $('sfcGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    s.steps.forEach(function(st) {
+      var card = document.createElement('div');
+      card.className = 'glass sfc-step ' + st.status;
+      card.dataset.step = st.id;
+      var badge = st.status === 'active'
+        ? '<span class="badge bg-cyan-500/15 border-cyan-500/40 text-cyan-300 text-[9px]">ACTIVE</span>'
+        : st.status === 'done'
+        ? '<span class="badge bg-emerald-500/15 border-emerald-500/40 text-emerald-300 text-[9px]">DONE</span>'
+        : '<span class="badge bg-slate-700/30 border-slate-600/30 text-slate-400 text-[9px]">PENDING</span>';
+      card.innerHTML =
+        '<div class="flex items-center gap-2 mb-1">' +
+          '<div class="step-num">' + st.id + '</div>' +
+          '<div class="flex-1">' +
+            '<div class="flex items-center justify-between">' +
+              '<p class="text-xs font-bold text-slate-200">' + st.name + '</p>' + badge +
+            '</div>' +
+            '<p class="text-[10px] text-slate-500 mt-0.5">' + st.description + '</p>' +
+            '<p class="text-[9px] font-mono text-slate-600 mt-1">⏱ ' + st.duration + 's</p>' +
+          '</div>' +
+        '</div>';
+      grid.appendChild(card);
+    });
+  }
+
+  // ---------- E-Stop button appearance ----------
+  function updateEstopBtn(s) {
+    var btn = $('btnEstop');
+    if (!btn) return;
+    if (s.estop) {
+      btn.innerHTML = '<i data-lucide="rotate-ccw" class="w-4 h-4"></i> RESET E-STOP';
+      btn.classList.remove('bg-red-600','hover:bg-red-500','shadow-red-900/40');
+      btn.classList.add('bg-amber-500','hover:bg-amber-400','shadow-amber-900/40');
+    } else {
+      btn.innerHTML = '<i data-lucide="octagon-alert" class="w-4 h-4"></i> E-STOP';
+      btn.classList.remove('bg-amber-500','hover:bg-amber-400','shadow-amber-900/40');
+      btn.classList.add('bg-red-600','hover:bg-red-500','shadow-red-900/40');
+    }
+    if (window.lucide) lucide.createIcons();
+  }
+
+  // ---------- Master render ----------
+  function render(s) {
+    if (!s) return;
+    lastState = s;
+
+    // Header
+    var lat = $('latency'); if (lat) lat.textContent = s.plc.latency_ms;
+    var vpn = $('vpnRole'); if (vpn) vpn.textContent = s.plc.vpn_role;
+    var cb = $('connBadge');
+    if (cb) cb.className = 'badge ' + (s.plc.online
+      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+      : 'bg-red-500/10 border-red-500/30 text-red-400');
+
+    updateEstopBtn(s);
+
+    // KPIs
+    if ($('kpiStep')) $('kpiStep').textContent = s.sequence.step ? 'STEP ' + s.sequence.step : 'IDLE';
+    if ($('kpiStepSub')) $('kpiStepSub').textContent = s.sequence.name + ' • ' + s.sequence.step + '/8';
+    if ($('kpiTemp')) $('kpiTemp').textContent = s.kpis.reactor_temp.toFixed(1);
+    if ($('kpiProduct')) $('kpiProduct').textContent = s.kpis.product_level.toFixed(1);
+    if ($('kpiBatch')) $('kpiBatch').textContent = s.kpis.batch;
+    if ($('kpiCycles')) $('kpiCycles').textContent = s.kpis.cycles;
+
+    // Progress
+    var prog = s.sequence.progress || 0;
+    if ($('progressBar')) $('progressBar').style.width = prog + '%';
+    if ($('progressText')) $('progressText').textContent = prog.toFixed(1) + '%';
+    if ($('progressElapsed')) $('progressElapsed').textContent = Math.round(s.sequence.elapsed) + 's elapsed';
+    if ($('progressRemaining')) $('progressRemaining').textContent = Math.round(s.sequence.remaining) + 's remaining';
+
+    // PLC info
+    if ($('linkStatus')) $('linkStatus').textContent = s.plc.online ? '● ONLINE' : '● OFFLINE';
+    if ($('outputsOn')) $('outputsOn').textContent = s.kpis.outputs_on;
+    if ($('uptime')) {
+      var u = s.kpis.uptime_s;
+      $('uptime').textContent = Math.floor(u/60) + 'm ' + (u%60) + 's';
+    }
+
+    // Alarms
+    var al = $('alarmList');
+    if (al) {
+      if (!s.alarms || s.alarms.length === 0) {
+        al.innerHTML = '<p class="text-slate-500 italic">No active alarms</p>';
+      } else {
+        al.innerHTML = s.alarms.map(function(a) {
+          var cls = a.severity === 'CRITICAL' ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300';
+          return '<div class="flex items-start gap-2 p-1.5 rounded ' + cls + '">' +
+                 '<span class="text-[9px] font-mono mt-0.5">' + a.severity + '</span>' +
+                 '<div><p class="font-semibold">' + a.code + '</p><p class="opacity-80">' + a.message + '</p></div></div>';
+        }).join('');
+      }
+    }
+
+    // Tanks
+    ['TK_101','TK_102','TK_103','TK_104','TK_105','TK_107','TK_108','TK_111','TK_106','TK_110'].forEach(function(t) {
+      if (s.analog[t + '_LEVEL']) setTank(t, s.analog[t + '_LEVEL'].value);
+    });
+
+    // Outputs per screen
+    renderOutputs(s, 'outs-1', 1);
+    renderOutputs(s, 'outs-2', 2);
+    renderOutputs(s, 'outs-3', 3);
+
+    // SFC
+    renderSfc(s);
+
+    // Analytics
+    if ($('anaPh')) $('anaPh').textContent = s.analog.PH.value.toFixed(2);
+    if ($('anaFlow')) $('anaFlow').textContent = s.analog.FLOW.value.toFixed(1);
+    if ($('anaPres')) $('anaPres').textContent = s.analog.PRESSURE.value.toFixed(2);
+    if ($('anaWater')) $('anaWater').textContent = s.analog.TK_106_TEMP.value.toFixed(1);
+
+    // Sparkline histories
+    histories.step.push(s.sequence.step || 0);
+    histories.temp.push(s.kpis.reactor_temp);
+    histories.product.push(s.kpis.product_level);
+    histories.flow.push(s.kpis.flow);
+    Object.keys(histories).forEach(function(k){ if (histories[k].length > 30) histories[k].shift(); });
+    updateSpark('spark-step', histories.step);
+    updateSpark('spark-temp', histories.temp);
+    updateSpark('spark-product', histories.product);
+    updateSpark('spark-flow', histories.flow);
+
+    // Chart
+    if (trendChart) {
+      var label = new Date().toLocaleTimeString('en-GB', { hour12: false });
+      trendChart.data.labels.push(label);
+      trendChart.data.datasets[0].data.push(s.analog.TK_102_TEMP.value);
+      trendChart.data.datasets[1].data.push(s.analog.TK_106_TEMP.value);
+      if (trendChart.data.labels.length > 60) {
+        trendChart.data.labels.shift();
+        trendChart.data.datasets.forEach(function(d){ d.data.shift(); });
+      }
+      trendChart.update('none');
+    }
+  }
+
+  // ---------- Chart ----------
+  function initChart() {
+    var canvas = document.getElementById('trendChart');
+    if (!canvas || !window.Chart) return;
+    trendChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'TK_102 °C', data: [], borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,.1)', tension: .35, fill: true, pointRadius: 0, borderWidth: 2 },
+          { label: 'TK_106 °C', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.1)', tension: .35, fill: true, pointRadius: 0, borderWidth: 2 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 8 }, grid: { color: 'rgba(148,163,184,.08)' } },
+          y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(148,163,184,.08)' },
+               title: { display: true, text: 'Temperature (°C)', color: '#94a3b8', font: { size: 10 } } }
+        }
+      }
+    });
+  }
+
+  // ---------- Poll ----------
+  function poll() {
+    fetch('/api/telemetry')
+      .then(function(r){ return r.json(); })
+      .then(render)
+      .catch(function(e){ console.warn('poll failed:', e); });
+  }
+})();
+</script>
+</body>
+</html>
